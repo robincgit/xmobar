@@ -23,9 +23,8 @@ import System.FilePath ((</>))
 import System.IO (IOMode(ReadMode), hGetLine, withFile)
 import System.Posix.Files (fileExist)
 import System.Console.GetOpt
-import Data.List (sort, sortBy, group)
+import Data.List (sort)
 import Data.Maybe (fromMaybe)
-import Data.Ord (comparing)
 import Text.Read (readMaybe)
 
 data BattOpts = BattOpts
@@ -110,6 +109,15 @@ parseOpts argv =
     (_, _, errs) -> ioError . userError $ concat errs
 
 data Status = Charging | Discharging | Full | Idle | Unknown deriving (Read, Eq)
+
+instance Ord Status where
+    compare a b = compare (statusRank a) (statusRank b) where
+        statusRank :: Status -> Integer
+        statusRank Discharging = 1
+        statusRank Charging    = 2
+        statusRank Full        = 3
+        statusRank Idle        = 4
+        statusRank Unknown     = 5
 
 data Result = Result Float Float Float Status | NA
 
@@ -202,14 +210,6 @@ readBattery sc files =
           grabs f = handle onError' $ withFile f ReadMode hGetLine
           onError' = const (return "Unknown") :: SomeException -> IO String
 
--- sortOn is only available starting at ghc 7.10
-sortOn :: Ord b => (a -> b) -> [a] -> [a]
-sortOn f =
-  map snd . sortBy (comparing fst) . map (\x -> let y = f x in y `seq` (y, x))
-
-mostCommonDef :: Eq a => a -> [a] -> a
-mostCommonDef x xs = head $ last $ [x] : sortOn length (group xs)
-
 maybeAlert :: BattOpts -> Float -> IO ()
 maybeAlert opts left =
   case onLowAction opts of
@@ -230,9 +230,10 @@ readBatteries opts bfs =
            mwatts = if watts == 0 then 1 else sign * watts
            time' b = (if ac then full b - now b else now b) / mwatts
            statuses :: [Status]
-           statuses = map (fromMaybe Unknown . readMaybe)
-                          (sort (map status bats))
-           acst = mostCommonDef Unknown $ filter (Unknown/=) statuses
+           statuses = sort $ map (fromMaybe Unknown . readMaybe . status) bats
+           acst = case filter (/= Unknown) statuses of
+                    []  -> Unknown
+                    x:_ -> x
            racst | acst /= Unknown = acst
                  | time == 0 = Idle
                  | ac = Charging
